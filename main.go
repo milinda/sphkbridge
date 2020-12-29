@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"github.com/brutella/hc"
 	"github.com/brutella/hc/accessory"
+	caccessory "github.com/milinda/sphkbridge/accessory"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	qrterminal "github.com/mdp/qrterminal/v3"
+	"github.com/skip2/go-qrcode"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"log"
@@ -89,7 +90,7 @@ func setupNewGosundDimmerSwitch(config map[string]interface{}) {
 					Model:        "SW2",
 				}
 
-				acc := accessory.NewColoredLightbulb(accInfo)
+				acc := caccessory.NewDimmableLightbulb(accInfo)
 				acc.Lightbulb.On.SetValue(power)
 				acc.Lightbulb.Brightness.SetValue(brightness)
 
@@ -105,7 +106,7 @@ func setupNewGosundDimmerSwitch(config map[string]interface{}) {
 
 				go func() {
 					uri, _ := transport.XHMURI()
-					qrterminal.Generate(uri, qrterminal.L, os.Stdout)
+					qrcode.WriteFile(uri, qrcode.Medium, 256, fmt.Sprintf("%s.png", name))
 				}()
 
 				gosundDS = &GosundDimmerSwitch{

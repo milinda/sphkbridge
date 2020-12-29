@@ -5,14 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"github.com/brutella/hc"
-	"github.com/brutella/hc/accessory"
+	"github.com/milinda/sphkbridge/accessory"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"go.uber.org/zap"
 )
 
 type GosundDimmerSwitch struct {
 	Id              string
-	Accessory       *accessory.ColoredLightbulb
+	Accessory       *accessory.DimmableLightbulb
 	Transport       hc.Transport
 	Power           bool
 	Brightness      int
