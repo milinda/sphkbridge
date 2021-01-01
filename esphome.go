@@ -5,15 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"github.com/brutella/hc"
-	"github.com/milinda/sphkbridge/accessory"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/milinda/sphkbridge/accessory"
 	"go.uber.org/zap"
 )
 
-type GosundDimmerSwitch struct {
+type ESPHomeDimmerSwitch struct {
 	Id              string
 	Accessory       *accessory.DimmableLightbulb
 	Transport       hc.Transport
+	IsTreatLife     bool
 	Power           bool
 	Brightness      int
 	CommandTopic    string
@@ -23,12 +24,37 @@ type GosundDimmerSwitch struct {
 
 type GosundDimmerSwitchState struct {
 	State      string `json:"state"`
-	Brightness int    `json:"Brightness"`
+	Brightness int    `json:"brightness"`
 }
 
-func (g *GosundDimmerSwitch) SetBrightness(pct int) error {
+func (g *ESPHomeDimmerSwitch) SetBrightness(pct int) error {
 	if pct > 100 || pct < 0 {
 		return errors.New(fmt.Sprintf("invalid Brightness percentage %d", pct))
+	}
+
+	if (g.IsTreatLife) {
+		var powerStr string
+		if g.Power {
+			powerStr = "ON"
+		} else {
+			powerStr = "OFF"
+		}
+
+		state := GosundDimmerSwitchState{State: powerStr, Brightness: int((float64(pct) / float64(100)) * 255)}
+		stateMsg, err := json.Marshal(state)
+		if err != nil {
+			zap.S().Error(err)
+			return errors.New("could not convert state to JSON")
+		}
+
+		zap.S().Info(stateMsg)
+		if token := g.MqClient.Publish(g.CommandTopic, 0, false, stateMsg);
+			token.Wait() && token.Error() != nil {
+			zap.S().Error(token.Error())
+			return errors.New(fmt.Sprintf("could not publish to topic %s", g.CommandTopic))
+		}
+
+		return nil
 	}
 
 	if token := g.MqClient.Publish(g.BrightnessTopic, 0, false, fmt.Sprintf("%d", pct));
@@ -40,7 +66,7 @@ func (g *GosundDimmerSwitch) SetBrightness(pct int) error {
 	return nil
 }
 
-func (g *GosundDimmerSwitch) SetPower(power bool) error {
+func (g *ESPHomeDimmerSwitch) SetPower(power bool) error {
 	var powerStr string
 	var state GosundDimmerSwitchState
 	if power {

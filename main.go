@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	lights     map[string]*GosundDimmerSwitch
+	lights     map[string]*ESPHomeDimmerSwitch
 	pin        string
 	mqttClient mqtt.Client
 )
@@ -57,11 +57,11 @@ func connectMqtt(brokerUrl string, userName string, password string) (mqtt.Clien
 	return client, nil
 }
 
-func setupNewGosundDimmerSwitch(config map[string]interface{}) {
+func setupNewDimmerSwitch(config map[string]interface{}) {
 	name := fmt.Sprintf("%v", config["name"])
 	stateTopic := fmt.Sprintf("%v", config["state_topic"])
 
-	zap.S().Infof("Registering new GosundDimmerSwitch for %s at topic %s", name, stateTopic)
+	zap.S().Infof("Registering new ESPHomeDimmerSwitch for %s at topic %s", name, stateTopic)
 
 	if token := mqttClient.Subscribe(stateTopic, 0, func(client mqtt.Client, msg mqtt.Message) {
 		var gosundDSState *GosundDimmerSwitchState
@@ -78,16 +78,29 @@ func setupNewGosundDimmerSwitch(config map[string]interface{}) {
 			}
 			brightness = int((float64(gosundDSState.Brightness) / float64(255)) * 100)
 
-			gosundDS, found := lights[name]
+			dimmerSwitch, found := lights[name]
 
 			if found {
-				gosundDS.Power = power
-				gosundDS.Brightness = brightness
+				dimmerSwitch.Power = power
+				dimmerSwitch.Brightness = brightness
+				dimmerSwitch.Accessory.Lightbulb.On.SetValue(power)
+				dimmerSwitch.Accessory.Lightbulb.Brightness.SetValue(brightness)
 			} else {
-				accInfo := accessory.Info{
-					Name:         name,
-					Manufacturer: "Gosund",
-					Model:        "SW2",
+				var accInfo accessory.Info
+				var isTreatlife bool = false
+				if strings.HasPrefix(stateTopic, "treatlifeds03/") {
+					accInfo = accessory.Info{
+						Name:         name,
+						Manufacturer: "Treatlife",
+						Model:        "DS03",
+					}
+					isTreatlife = true
+				} else {
+					accInfo = accessory.Info{
+						Name:         name,
+						Manufacturer: "Gosund",
+						Model:        "SW2",
+					}
 				}
 
 				acc := caccessory.NewDimmableLightbulb(accInfo)
@@ -101,15 +114,12 @@ func setupNewGosundDimmerSwitch(config map[string]interface{}) {
 				}
 
 				go func() {
+					uri, _ := transport.XHMURI()
+					qrcode.WriteFile(uri, qrcode.Medium, 256, fmt.Sprintf("%s.png", name))
 					transport.Start()
 				}()
 
-				go func() {
-					uri, _ := transport.XHMURI()
-					qrcode.WriteFile(uri, qrcode.Medium, 256, fmt.Sprintf("%s.png", name))
-				}()
-
-				gosundDS = &GosundDimmerSwitch{
+				dimmerSwitch = &ESPHomeDimmerSwitch{
 					Id:              name,
 					Accessory:       acc,
 					Transport:       transport,
@@ -118,20 +128,21 @@ func setupNewGosundDimmerSwitch(config map[string]interface{}) {
 					CommandTopic:    fmt.Sprintf("%v", config["command_topic"]),
 					BrightnessTopic: fmt.Sprintf("%v/brightness_pct", config["command_topic"]),
 					MqClient:        mqttClient,
+					IsTreatLife: isTreatlife,
 				}
 
-				lights[name] = gosundDS
+				lights[name] = dimmerSwitch
 
 				acc.OnIdentify(func() {
 					zap.S().Infof("Identifying accessory %s", name)
 				})
 
 				acc.Lightbulb.On.OnValueRemoteUpdate(func(power bool) {
-					gosundDS.SetPower(power)
+					dimmerSwitch.SetPower(power)
 				})
 
 				acc.Lightbulb.Brightness.OnValueRemoteUpdate(func(brightness int) {
-					gosundDS.SetBrightness(brightness)
+					dimmerSwitch.SetBrightness(brightness)
 				})
 			}
 		}
@@ -156,14 +167,15 @@ func initialize(c *Configuration) {
 	}
 
 	if token := mqttClient.Subscribe("homeassistant/#", 0, func(client mqtt.Client, msg mqtt.Message) {
-		if strings.HasPrefix(msg.Topic(), "homeassistant/light/gosundsw2/") {
+		if strings.HasPrefix(msg.Topic(), "homeassistant/light/gosundsw2/") ||
+			strings.HasPrefix(msg.Topic(), "homeassistant/light/treatlifeds03") {
 			var deviceConfig map[string]interface{}
 
 			err = json.Unmarshal(msg.Payload(), &deviceConfig)
 			if err == nil {
 				_, found := lights[fmt.Sprintf("%v", deviceConfig["name"])]
 				if !found {
-					setupNewGosundDimmerSwitch(deviceConfig)
+					go setupNewDimmerSwitch(deviceConfig)
 				}
 			} else {
 				zap.S().Errorf("Could not parse message %s", msg.Payload())
@@ -191,7 +203,7 @@ func main() {
 		config = DefaultConfig()
 	}
 
-	lights = map[string]*GosundDimmerSwitch{}
+	lights = map[string]*ESPHomeDimmerSwitch{}
 	pin = config.Pin
 
 	zap.S().Infof("HomeKit pin: %s", pin)
