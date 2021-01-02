@@ -108,7 +108,7 @@ func setupNewDimmerSwitch(config map[string]interface{}, c *Configuration) {
 
 				var tConfig hc.Config
 				if c.StorageDir != "" {
-					tConfig = hc.Config{Pin: c.Pin, StoragePath: c.StorageDir}
+					tConfig = hc.Config{Pin: c.Pin, StoragePath: fmt.Sprintf("%s/%s", c.StorageDir, name)}
 				} else {
 					tConfig = hc.Config{Pin: c.Pin}
 				}
