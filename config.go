@@ -11,7 +11,7 @@ import (
 type Configuration struct {
 	Name       string  `hcl:"name"`
 	Pin        string  `hcl:"pin"`
-	StorageDir string  `hcl:"storage-dir"`
+	StorageDir string  `hcl:"storage-dir,optional"`
 	Broker     *Broker `hcl:"broker,block"`
 }
 
@@ -47,7 +47,7 @@ func ParseConfig(configPath string) (c *Configuration, err error) {
 func DefaultConfig() *Configuration {
 	return &Configuration{
 		Name: "homekit-esphome-bridge",
-		Pin:  "865-369",
+		Pin:  "865369",
 		Broker: &Broker{
 			Url:      "tcp://localhost:1883",
 			UserName: "",
