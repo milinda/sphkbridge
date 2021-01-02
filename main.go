@@ -21,7 +21,6 @@ import (
 
 var (
 	lights     map[string]*ESPHomeDimmerSwitch
-	pin        string
 	mqttClient mqtt.Client
 )
 
@@ -57,7 +56,7 @@ func connectMqtt(brokerUrl string, userName string, password string) (mqtt.Clien
 	return client, nil
 }
 
-func setupNewDimmerSwitch(config map[string]interface{}) {
+func setupNewDimmerSwitch(config map[string]interface{}, c *Configuration) {
 	name := fmt.Sprintf("%v", config["name"])
 	stateTopic := fmt.Sprintf("%v", config["state_topic"])
 
@@ -107,7 +106,12 @@ func setupNewDimmerSwitch(config map[string]interface{}) {
 				acc.Lightbulb.On.SetValue(power)
 				acc.Lightbulb.Brightness.SetValue(brightness)
 
-				tConfig := hc.Config{Pin: pin}
+				var tConfig hc.Config
+				if c.StorageDir != "" {
+					tConfig = hc.Config{Pin: c.Pin, StoragePath: c.StorageDir}
+				} else {
+					tConfig = hc.Config{Pin: c.Pin}
+				}
 				transport, err := hc.NewIPTransport(tConfig, acc.Accessory)
 				if err != nil {
 					zap.S().Panic(err)
@@ -175,7 +179,7 @@ func initialize(c *Configuration) {
 			if err == nil {
 				_, found := lights[fmt.Sprintf("%v", deviceConfig["name"])]
 				if !found {
-					go setupNewDimmerSwitch(deviceConfig)
+					go setupNewDimmerSwitch(deviceConfig, c)
 				}
 			} else {
 				zap.S().Errorf("Could not parse message %s", msg.Payload())
@@ -204,9 +208,8 @@ func main() {
 	}
 
 	lights = map[string]*ESPHomeDimmerSwitch{}
-	pin = config.Pin
 
-	zap.S().Infof("HomeKit pin: %s", pin)
+	zap.S().Infof("HomeKit pin: %s", config.Pin)
 
 	initialize(config)
 

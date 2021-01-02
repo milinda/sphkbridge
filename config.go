@@ -9,9 +9,10 @@ import (
 )
 
 type Configuration struct {
-	Name   string  `hcl:"name"`
-	Pin    string  `hcl:"pin"`
-	Broker *Broker `hcl:"broker,block"`
+	Name       string  `hcl:"name"`
+	Pin        string  `hcl:"pin"`
+	StorageDir string  `hcl:"storage-dir"`
+	Broker     *Broker `hcl:"broker,block"`
 }
 
 type Broker struct {
