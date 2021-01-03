@@ -10,6 +10,17 @@ import (
 	"go.uber.org/zap"
 )
 
+
+type ESPHomeFan struct {
+	Id                string
+	Accessory         *accessory.Fan
+	Transport         hc.Transport
+	Power             bool
+	Speed             float64
+	SpeedCommandTopic string
+	StateCommandTopic string
+	MqClient          mqtt.Client
+}
 type ESPHomeDimmerSwitch struct {
 	Id              string
 	Accessory       *accessory.DimmableLightbulb
@@ -22,7 +33,7 @@ type ESPHomeDimmerSwitch struct {
 	MqClient        mqtt.Client
 }
 
-type GosundDimmerSwitchState struct {
+type ESPHomeDimmerSwitchState struct {
 	State      string `json:"state"`
 	Brightness int    `json:"brightness"`
 }
@@ -32,7 +43,7 @@ func (g *ESPHomeDimmerSwitch) SetBrightness(pct int) error {
 		return errors.New(fmt.Sprintf("invalid Brightness percentage %d", pct))
 	}
 
-	if (g.IsTreatLife) {
+	if g.IsTreatLife {
 		var powerStr string
 		if g.Power {
 			powerStr = "ON"
@@ -40,7 +51,7 @@ func (g *ESPHomeDimmerSwitch) SetBrightness(pct int) error {
 			powerStr = "OFF"
 		}
 
-		state := GosundDimmerSwitchState{State: powerStr, Brightness: int((float64(pct) / float64(100)) * 255)}
+		state := ESPHomeDimmerSwitchState{State: powerStr, Brightness: int((float64(pct) / float64(100)) * 255)}
 		stateMsg, err := json.Marshal(state)
 		if err != nil {
 			zap.S().Error(err)
@@ -68,7 +79,7 @@ func (g *ESPHomeDimmerSwitch) SetBrightness(pct int) error {
 
 func (g *ESPHomeDimmerSwitch) SetPower(power bool) error {
 	var powerStr string
-	var state GosundDimmerSwitchState
+	var state ESPHomeDimmerSwitchState
 	if power {
 		powerStr = "ON"
 	} else {
@@ -77,11 +88,11 @@ func (g *ESPHomeDimmerSwitch) SetPower(power bool) error {
 
 	if g.Brightness == 0 && power {
 		zap.S().Info(fmt.Sprintf("Truning the light %s since brightness is 0.", g.Id))
-		state = GosundDimmerSwitchState{
+		state = ESPHomeDimmerSwitchState{
 			State: "OFF",
 		}
 	} else {
-		state = GosundDimmerSwitchState{
+		state = ESPHomeDimmerSwitchState{
 			State:      powerStr,
 			Brightness: int((float64(g.Brightness) / float64(100)) * 255),
 		}
@@ -98,6 +109,44 @@ func (g *ESPHomeDimmerSwitch) SetPower(power bool) error {
 		token.Wait() && token.Error() != nil {
 		zap.S().Error(token.Error())
 		return errors.New(fmt.Sprintf("could not publish to topic %s", g.CommandTopic))
+	}
+
+	return nil
+}
+
+func (g *ESPHomeFan) SetSpeed(speed float64) error {
+	var speedStr string
+
+	if speed <= 34 {
+		speedStr = "low"
+	} else if speed > 34 && speed <= 68 {
+		speedStr = "medium"
+	} else {
+		speedStr = "high"
+	}
+
+	if token := g.MqClient.Publish(g.SpeedCommandTopic, 0, false, speedStr);
+		token.Wait() && token.Error() != nil {
+		zap.S().Error(token.Error())
+		return errors.New(fmt.Sprintf("could not publish to topic %s", g.SpeedCommandTopic))
+	}
+
+	return nil
+}
+
+func (g *ESPHomeFan) SetPower(power bool) error {
+	var powerStr string
+
+	if power {
+		powerStr = "ON"
+	} else {
+		powerStr = "OFF"
+	}
+
+	if token := g.MqClient.Publish(g.StateCommandTopic, 0, false, powerStr);
+		token.Wait() && token.Error() != nil {
+		zap.S().Error(token.Error())
+		return errors.New(fmt.Sprintf("could not publish to topic %s", g.StateCommandTopic))
 	}
 
 	return nil

@@ -21,6 +21,7 @@ import (
 
 var (
 	lights     map[string]*ESPHomeDimmerSwitch
+	fans       map[string]*ESPHomeFan
 	mqttClient mqtt.Client
 )
 
@@ -56,6 +57,110 @@ func connectMqtt(brokerUrl string, userName string, password string) (mqtt.Clien
 	return client, nil
 }
 
+func setupNewFan(config map[string]interface{}, c *Configuration) {
+	name := fmt.Sprintf("%v", config["name"])
+	speedCommandTopic := fmt.Sprintf("%v", config["speed_command_topic"])
+	speedStateTopic := fmt.Sprintf("%v", config["speed_state_topic"])
+	powerCommandTopic := fmt.Sprintf("%v", config["command_topic"])
+	powerStateTopic := fmt.Sprintf("%v", config["state_topic"])
+
+	zap.S().Infof("Registering new ESPHomeFan for %s at topic %s", name, powerStateTopic)
+
+	if token := mqttClient.Subscribe(powerStateTopic, 0, func(client mqtt.Client, msg mqtt.Message) {
+		var power = false
+		state := string(msg.Payload())
+
+		if state == "ON" {
+			power = true
+		}
+
+		fan, found := fans[name]
+
+		if found {
+			fan.Power = power
+			fan.Accessory.Fan.On.SetValue(power)
+		} else {
+			accInfo := accessory.Info{
+				Name:         name,
+				Manufacturer: "Treatlife",
+				Model:        "DS03",
+			}
+
+			acc := caccessory.NewFan(accInfo)
+			acc.Fan.On.SetValue(power)
+
+			var tConfig hc.Config
+			if c.StorageDir != "" {
+				tConfig = hc.Config{Pin: c.Pin, StoragePath: fmt.Sprintf("%s/%s", c.StorageDir, name)}
+			} else {
+				tConfig = hc.Config{Pin: c.Pin}
+			}
+			transport, err := hc.NewIPTransport(tConfig, acc.Accessory)
+			if err != nil {
+				zap.S().Panic(err)
+			}
+
+			go func() {
+				uri, _ := transport.XHMURI()
+				qrcode.WriteFile(uri, qrcode.Medium, 256, fmt.Sprintf("%s.png", name))
+				transport.Start()
+			}()
+
+			fan := &ESPHomeFan{
+				Id:                name,
+				Accessory:         acc,
+				Transport:         transport,
+				Power:             power,
+				StateCommandTopic: powerCommandTopic,
+				SpeedCommandTopic: speedCommandTopic,
+				MqClient:          mqttClient,
+			}
+
+			fans[name] = fan
+
+			acc.OnIdentify(func() {
+				zap.S().Infof("Identifying accessory %s", name)
+			})
+
+			acc.Fan.On.OnValueRemoteUpdate(func(power bool) {
+				fan.SetPower(power)
+			})
+
+			acc.Fan.Speed.OnValueRemoteUpdate(func(speed float64) {
+				fan.SetSpeed(speed)
+			})
+
+			if token := mqttClient.Subscribe(speedStateTopic, 0, func(client mqtt.Client, msg mqtt.Message) {
+				var speed float64
+
+				fan, found := fans[name]
+				if !found {
+					zap.S().Warnf("Could not find fan instance with name %s. This should not happen at this state.", name)
+				} else {
+					speedStr := string(msg.Payload())
+
+					if speedStr == "low" {
+						speed = 34.0
+					} else if speedStr == "medium" {
+						speed = 68.0
+					} else if speedStr == "high" {
+						speed = 100.0
+					} else {
+						speed = 0.0
+					}
+
+					fan.Speed = speed
+					fan.Accessory.Fan.Speed.SetValue(speed)
+				}
+			}); token.Wait() && token.Error() != nil {
+				zap.S().Panicf("Could not subscribe to topic %s", speedStateTopic)
+			}
+		}
+	}); token.Wait() && token.Error() != nil {
+		zap.S().Panicf("Could not subscribe to topic %s", powerStateTopic)
+	}
+}
+
 func setupNewDimmerSwitch(config map[string]interface{}, c *Configuration) {
 	name := fmt.Sprintf("%v", config["name"])
 	stateTopic := fmt.Sprintf("%v", config["state_topic"])
@@ -63,18 +168,17 @@ func setupNewDimmerSwitch(config map[string]interface{}, c *Configuration) {
 	zap.S().Infof("Registering new ESPHomeDimmerSwitch for %s at topic %s", name, stateTopic)
 
 	if token := mqttClient.Subscribe(stateTopic, 0, func(client mqtt.Client, msg mqtt.Message) {
-		var gosundDSState *GosundDimmerSwitchState
-		var power bool
+		var gosundDSState *ESPHomeDimmerSwitchState
 		var brightness int
+		var power = true
 		err := json.Unmarshal(msg.Payload(), &gosundDSState)
 		if err != nil {
 			zap.S().Errorf("Could not unmarshall state %s", msg.Payload())
 		} else {
 			if gosundDSState.State == "ON" {
 				power = true
-			} else {
-				power = false
 			}
+
 			brightness = int((float64(gosundDSState.Brightness) / float64(255)) * 100)
 
 			dimmerSwitch, found := lights[name]
@@ -132,7 +236,7 @@ func setupNewDimmerSwitch(config map[string]interface{}, c *Configuration) {
 					CommandTopic:    fmt.Sprintf("%v", config["command_topic"]),
 					BrightnessTopic: fmt.Sprintf("%v/brightness_pct", config["command_topic"]),
 					MqClient:        mqttClient,
-					IsTreatLife: isTreatlife,
+					IsTreatLife:     isTreatlife,
 				}
 
 				lights[name] = dimmerSwitch
@@ -173,16 +277,28 @@ func initialize(c *Configuration) {
 	if token := mqttClient.Subscribe("homeassistant/#", 0, func(client mqtt.Client, msg mqtt.Message) {
 		if strings.HasPrefix(msg.Topic(), "homeassistant/light/gosundsw2/") ||
 			strings.HasPrefix(msg.Topic(), "homeassistant/light/treatlifeds03") {
-			var deviceConfig map[string]interface{}
+			var dimmerConfig map[string]interface{}
 
-			err = json.Unmarshal(msg.Payload(), &deviceConfig)
+			err = json.Unmarshal(msg.Payload(), &dimmerConfig)
 			if err == nil {
-				_, found := lights[fmt.Sprintf("%v", deviceConfig["name"])]
+				_, found := lights[fmt.Sprintf("%v", dimmerConfig["name"])]
 				if !found {
-					go setupNewDimmerSwitch(deviceConfig, c)
+					go setupNewDimmerSwitch(dimmerConfig, c)
 				}
 			} else {
-				zap.S().Errorf("Could not parse message %s", msg.Payload())
+				zap.S().Errorf("could not parse message %s", msg.Payload())
+			}
+		} else if strings.HasPrefix(msg.Topic(), "homeassistant/fan/treatlifeds03") {
+			var fanConfig map[string]interface{}
+
+			err = json.Unmarshal(msg.Payload(), &fanConfig)
+			if err == nil {
+				_, found := fans[fmt.Sprintf("%v", fanConfig["name"])]
+				if !found {
+					go setupNewFan(fanConfig, c)
+				}
+			} else {
+				zap.S().Errorf("could not parse message %s", msg.Payload())
 			}
 		}
 	}); token.Wait() && token.Error() != nil {
@@ -208,6 +324,7 @@ func main() {
 	}
 
 	lights = map[string]*ESPHomeDimmerSwitch{}
+	fans = map[string]*ESPHomeFan{}
 
 	zap.S().Infof("HomeKit pin: %s", config.Pin)
 
